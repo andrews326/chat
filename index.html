@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Client</title>
+</head>
+<body>
+    <input type="text" id="userIdInput" placeholder="Enter your user ID">
+    <button onclick="connectWebSocket()">Connect</button>
+    <input type="text" id="messageInput" placeholder="Type a message">
+    <button onclick="sendMessage()">Send</button>
+    <div id="connectionStatus">Not Connected</div>
+    <button onclick="startRecording()">Start Recording</button>
+    <button onclick="stopRecording()">Stop Recording</button>
+    <button onclick="sendRecording()">Send Recording</button>
+    <ul id="messages"></ul>
+
+    <script>
+        let socket;
+        let loggedInUserID; // Variable to store the logged-in user ID
+        let mediaRecorder;
+        let audioChunks = [];
+
+        async function getAllMessages(userID) {
+            try {
+                const response = await fetch(`/ws?userId=${userID}`);
+                const history = await response.json();
+                return history;
+            } catch (error) {
+                console.error('Error fetching chat history:', error);
+                return [];
+            }
+        }
+
+        async function connectWebSocket() {
+            const userIdInput = document.getElementById('userIdInput');
+            const userId = userIdInput.value.trim();
+            const connectionStatus = document.getElementById('connectionStatus');
+
+
+            if (userId === '') {
+                alert('Please enter a valid user ID.');
+                return;
+            }
+
+            socket = new WebSocket(`ws://localhost:8080/ws?userId=${userId}`);
+
+            socket.addEventListener('open', (event) => {
+                loggedInUserID = userIdInput.value.trim();
+                connectionStatus.textContent = 'Connected';
+                console.log('WebSocket connection opened:', event);
+
+            });
+
+            socket.addEventListener('close', (event) => {
+                console.error('WebSocket connection closed:', event);
+                connectionStatus.textContent = 'Not Connected';
+
+                // Try to reconnect after a delay
+                setTimeout(() => {
+                    connectWebSocket();
+                }, 1000);
+            });
+
+            socket.addEventListener('message', (event) => {
+                const [userID, content, messageID] = event.data.split('|');
+                const messagesList = document.getElementById('messages');
+                
+                if (content.startsWith("/delete")) {
+                    const deletedMessageID = content.split("|")[1];
+                    const deletedListItem = document.getElementById(deletedMessageID);
+                    if (deletedListItem) {
+                        deletedListItem.remove();
+                    }
+                } else if (content.startsWith("/update")) {
+                    // Handle update operation, update the UI
+                    const listItem = document.getElementById(messageID);
+                    if (listItem) {
+                        listItem.textContent = `${userID}: ${content} `;
+                        console.log('Message updated:', messageID, content);
+                    }
+                } else {
+                    let listItem = document.getElementById(messageID);
+                    if (!listItem) {
+                        listItem = document.createElement('li');
+                        listItem.textContent = `${userID}: ${content} `;
+                        listItem.id = messageID;
+
+                        const deleteForMeButton = document.createElement('button');
+                        deleteForMeButton.textContent = 'Delete for me';
+                        deleteForMeButton.addEventListener('click', () => deleteMessage(messageID, userID));
+
+                        const deleteForEveryoneButton = document.createElement('button');
+                        deleteForEveryoneButton.textContent = 'Delete for everyone';
+                        deleteForEveryoneButton.addEventListener('click', () => deleteEveryone(messageID, userID, loggedInUserID));
+
+                        const updateButton = document.createElement('button');
+                        updateButton.textContent = 'Update';
+                        updateButton.addEventListener('click', () => updateMessage(messageID, loggedInUserID));
+
+                        listItem.appendChild(deleteForMeButton);
+                        listItem.appendChild(deleteForEveryoneButton);
+                        listItem.appendChild(updateButton);
+
+                        messagesList.appendChild(listItem);
+                        console.log('New message added:', messageID, content);
+                    }
+                }   
+            });
+
+            userIdInput.disabled = true;
+        }
+
+        function sendMessage() {
+            const messageInput = document.getElementById('messageInput');
+            const message = messageInput.value;
+            const fullMessage = '/add ' + message;
+
+            if (socket.readyState === WebSocket.OPEN) { 
+                socket.send(fullMessage);
+            } else {
+                console.error('WebSocket connection is not open. Trying to reconnect...');
+                connectWebSocket(); // Reconnect
+                // You may also consider queuing the messages and sending them once reconnected
+            }
+
+            messageInput.value = '';
+        }
+
+        function deleteMessage(messageID, userID) {
+            const deletedListItem = document.getElementById(messageID);
+
+            if (deletedListItem) {
+                removeMessageFromUI(messageID);
+
+                const deleteMessage = '/delete_for_me ' + messageID;
+
+                if (socket.readyState === WebSocket.OPEN) {
+                    socket.send(deleteMessage);
+                } else if (socket.readyState === WebSocket.CONNECTING) {
+                    setTimeout(() => deleteMessage(messageID, userID), 100);
+                } else {
+                    connectWebSocket();
+                    // setTimeout(() => {
+                    //     if (deleteForMeButton) {
+                    //         deleteForMeButton.disabled = false;
+                    //     }
+                    // }, 100);
+                }
+            }
+        }
+
+        function sendMessageOrReconnect(message) {
+            if (socket.readyState === WebSocket.OPEN) {
+                socket.send(message);
+            } else if (socket.readyState === WebSocket.CONNECTING) {
+                setTimeout(() => sendMessageOrReconnect(message), 100);
+            } else {
+                connectWebSocket();
+                setTimeout(() => sendMessageOrReconnect(message), 100);
+            }
+        }
+
+        function deleteEveryone(messageID, userID) {
+            const deleteEveryOneMessage = `/delete_for_everyone`;
+            const payload = JSON.stringify({ messageID, userID, loggedInUserID });
+            const fullMessage = `${deleteEveryOneMessage} ${payload}`;
+
+            if (socket.readyState === WebSocket.OPEN) {
+                socket.send(fullMessage);
+                removeMessageFromUI(messageID);
+            } else if (socket.readyState === WebSocket.CONNECTING) {
+                setTimeout(() => deleteEveryone(messageID, userID), 100);
+            } else {
+                connectWebSocket();
+                setTimeout(() => deleteEveryone(messageID, userID), 100);
+            }
+        }
+
+        function updateMessage(messageID, loggedInUserID) {
+            const updatedContent = prompt('Enter the updated message:');
+            if (updatedContent !== null) {
+            const updateCommand = `/update ${messageID} ${loggedInUserID} ${updatedContent}`;
+                socket.send(updateCommand);
+            }
+        }
+
+        function removeMessageFromUI(messageID) {
+            const deletedListItem = document.getElementById(messageID);
+            if (deletedListItem) {
+                deletedListItem.remove();
+            }
+        }
+
+        function appendMessage(userID, content, messageID) {
+            const messagesList = document.getElementById('messages');
+            const listItem = document.createElement('li');
+
+            const deleteForMeButton = document.createElement('button');
+            deleteForMeButton.textContent = 'Delete for me';
+            deleteForMeButton.addEventListener('click', () => deleteMessage(messageID, userID));
+
+            const deleteForEveryoneButton = document.createElement('button');
+            deleteForEveryoneButton.textContent = 'Delete for everyone';
+            deleteForEveryoneButton.addEventListener('click', () => deleteEveryone(messageID,userID,loggedInUserID));
+
+            const updateButton = document.createElement('button');
+            updateButton.textContent = 'Update';
+            updateButton.addEventListener('click', () => updateMessage(messageID, userID));
+
+            listItem.textContent = `${userID}: ${content} `;
+            listItem.appendChild(deleteForMeButton);
+            listItem.appendChild(deleteForEveryoneButton);
+            listItem.appendChild(updateButton);
+
+            listItem.id = messageID;
+            messagesList.appendChild(listItem);
+        }
+
+        async function startRecording() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+                if (!stream) {
+                    console.error('Failed to get a valid MediaStream.');
+                    return;
+                }
+
+                mediaRecorder = new MediaRecorder(stream);
+
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) {
+                        audioChunks.push(event.data);
+                    }
+                };
+
+                mediaRecorder.onstop = () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                    const audioUrl = URL.createObjectURL(audioBlob);
+                    // Optionally, you can play the recorded audio
+                    const audioElement = new Audio(audioUrl);
+                    audioElement.play();
+                };
+
+                mediaRecorder.start();
+            } catch (error) {
+                console.error('Error starting recording:', error);
+            }
+        }
+
+        function stopRecording() {
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+            }
+        }
+
+        // Modify the sendRecording function to handle audio data
+        async function sendRecording() {
+            if (audioChunks.length === 0) {
+                console.warn('No recorded audio to send.');
+                return;
+            }
+
+            const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+
+            try {
+                const formData = new FormData();
+                formData.append('audio', audioBlob, 'recorded_audio.wav');
+
+                const response = await fetch('/send_audio', {
+                    method: 'POST',
+                    body: formData,
+                });
+
+                if (response.ok) {
+                    console.log('Audio successfully sent to the server.');
+                } else {
+                    console.error('Failed to send audio to the server.');
+                }
+            } catch (error) {
+                console.error('Error sending audio to the server:', error);
+            }
+        }
+
+    </script>
+</body>
+</html>
