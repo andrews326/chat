@@ -1,0 +1,21 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: andrew-chat
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: git@github.com:andrews326/chat.git
+    targetRevision: HEAD
+    path: chat
+    helm:
+      valueFiles:
+        - values.yaml
+  destination:
+    server: 'https://kubernetes.default.svc'
+    namespace: default
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
