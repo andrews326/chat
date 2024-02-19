@@ -1,21 +1,16 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: andrew-chat
-  namespace: argocd
+  name: chat-app
+  namespace: default
 spec:
   project: default
   source:
-    repoURL: git@github.com:andrews326/chat.git
-    targetRevision: HEAD
-    path: chat
-    helm:
-      valueFiles:
-        - values.yaml
+    repoURL: https://github.com/andrews326/chat.git
+    targetRevision: main  # Or specify the branch/tag/commit you want to deploy
+    path: /  # Path to the root directory of your repository
   destination:
-    server: 'https://kubernetes.default.svc'
+    server: 'https://kubernetes.default.svc'  # URL of your Kubernetes cluster
     namespace: default
   syncPolicy:
-    automated:
-      prune: true
-      selfHeal: true
+    automated: {}
